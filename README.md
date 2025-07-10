@@ -57,10 +57,12 @@ Bucket: bucket1
 input/
   ├── file1.csv
   └── file2.csv
+ ![alt text](image-2.png)
 
 output/
   ├── file1.parquet
   └── file2.parquet
+![alt text](image-1.png)
 
 ✍️ Uwagi
 
