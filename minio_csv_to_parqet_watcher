@@ -4,13 +4,12 @@ from airflow.models import Variable
 from datetime import datetime
 import boto3
 import pandas as pd
-import hashlib
+import os
 
 BUCKET = "bucket1"
-KEY = "input/hw_200.csv"
-PARQUET_KEY = "output/hw_200.parquet"
-TMP_CSV = "/tmp/hw_200.csv"
-TMP_PARQUET = "/tmp/hw_200.parquet"
+INPUT_PREFIX = "input/"
+OUTPUT_PREFIX = "output/"
+TMP_DIR = "/tmp/minio_etl"
 S3_CONF = dict(
     endpoint_url='http://minio:9000',
     aws_access_key_id='minioadmin',
@@ -18,53 +17,40 @@ S3_CONF = dict(
     region_name='us-east-1'
 )
 
-def is_file_updated(**context):
-    s3 = boto3.client('s3', **S3_CONF)
-    s3.download_file(BUCKET, KEY, TMP_CSV)
-    # Wylicz hash pliku
-    with open(TMP_CSV, "rb") as f:
-        content = f.read()
-        file_hash = hashlib.md5(content).hexdigest()
-    last_hash = Variable.get("hw_200_last_hash", default_var="")
-    Variable.set("hw_200_last_hash", file_hash)
-    # Jeśli hash się zmienił, zwróć True (pipeline poleci dalej)
-    return file_hash != last_hash
+def ensure_tmp_dir():
+    os.makedirs(TMP_DIR, exist_ok=True)
 
-def convert_to_parquet():
-    df = pd.read_csv(TMP_CSV)
-    df.to_parquet(TMP_PARQUET)
-    print("Saved Parquet: /tmp/hw_200.parquet")
-
-def upload_parquet_to_minio():
+def process_new_files():
+    ensure_tmp_dir()
     s3 = boto3.client('s3', **S3_CONF)
-    s3.upload_file(TMP_PARQUET, BUCKET, PARQUET_KEY)
-    print(f"Uploaded Parquet to MinIO: {BUCKET}/{PARQUET_KEY}")
+    processed = Variable.get("minio_etl_processed", default_var="").split(",")
+    # List all objects in input/
+    resp = s3.list_objects_v2(Bucket=BUCKET, Prefix=INPUT_PREFIX)
+    keys = [item["Key"] for item in resp.get("Contents", []) if item["Key"].endswith(".csv")]
+    new_files = [k for k in keys if k not in processed]
+    for key in new_files:
+        local_csv = os.path.join(TMP_DIR, os.path.basename(key))
+        local_parquet = local_csv.replace(".csv", ".parquet")
+        out_key = OUTPUT_PREFIX + os.path.basename(local_parquet)
+        print(f"Pobieram {key} -> {local_csv}")
+        s3.download_file(BUCKET, key, local_csv)
+        df = pd.read_csv(local_csv)
+        df.to_parquet(local_parquet)
+        print(f"Zapisuję Parquet: {out_key}")
+        s3.upload_file(local_parquet, BUCKET, out_key)
+        # Dodaj do listy przetworzonych
+        processed.append(key)
+    Variable.set("minio_etl_processed", ",".join(processed))
 
 default_args = {'start_date': datetime(2024, 7, 10)}
 
 with DAG(
-    'minio_csv_to_parquet_watcher',
+    'minio_input_to_parquet_watcher',
     default_args=default_args,
-    schedule_interval="*/5 * * * *",  # co 5 minut
+    schedule_interval="*/10 * * * *",  # co 10 minut
     catchup=False
 ) as dag:
-    check_file = PythonOperator(
-        task_id='check_if_updated',
-        python_callable=is_file_updated,
-        provide_context=True
+    process = PythonOperator(
+        task_id='process_new_files',
+        python_callable=process_new_files
     )
-
-    convert = PythonOperator(
-        task_id='convert_csv_to_parquet',
-        python_callable=convert_to_parquet
-    )
-
-    upload = PythonOperator(
-        task_id='upload_parquet_to_minio',
-        python_callable=upload_parquet_to_minio
-    )
-
-    # Uruchamiaj kolejne tylko jeśli plik się zmienił
-    check_file >> convert >> upload
-    convert.trigger_rule = 'all_success'
-    upload.trigger_rule = 'all_success'
