@@ -1,56 +1,69 @@
-# CSV do Parquet z Airflow i MinIO (Docker)
+# 📦 ETL MinIO → Parquet z Airflowem i Docker Compose
 
-Mały projekt do nauki pipeline’ów danych. Chciałem zbudować coś prostego, co:
+Zrobiłem prosty pipeline, który przetwarza pliki CSV wrzucane do MinIO. Airflow co minutę sprawdza folder `input/`, konwertuje nowe pliki do Parquet i zapisuje je do `output/`.
 
-- sprawdza co 5 minut, czy na MinIO pojawił się nowy plik CSV,
-- jeśli tak – konwertuje go do Parquet,
-- i wrzuca z powrotem do MinIO do innego folderu.
-
-Użyłem Airflow do zarządzania zadaniami, MinIO jako S3-kompatybilnego storage’u i Docker Compose, żeby wszystko odpalić lokalnie.
+Całość działa lokalnie w Dockerze – wystarczy `docker-compose up` i wszystko się odpala (MinIO + Airflow). Bez kombinowania.
 
 ---
 
-## Jak to działa
+## 🔧 Jak działa pipeline
 
-1. Do MinIO wrzucam plik: `bucket1/input/hw_200.csv`
-2. Airflow uruchamia DAG co 5 minut
-3. Sprawdzany jest hash pliku (md5) – jak inny niż poprzedni, to:
-   - plik jest pobierany,
-   - konwertowany do Parquet (`/tmp/hw_200.parquet`)
-   - i wrzucany do: `bucket1/output/hw_200.parquet`
+1. Do MinIO wrzucam pliki CSV do `bucket1/input/`
+2. Airflow co minutę uruchamia DAG
+3. DAG sprawdza, które pliki już przetworzył (trzyma to jako zmienna w Airflowie)
+4. Każdy nowy CSV:
+   - jest pobierany lokalnie,
+   - konwertowany do `.parquet`,
+   - wrzucany do `bucket1/output/`
 
 ---
 
-## Uruchomienie
+## 🐳 Docker Compose
 
-1. Klonujesz repo:
+Wszystko jest opisane w `docker-compose.yml`. Odpala:
+- kontener z MinIO (porty 9000 i 9001),
+- kontener z Airflowem (port 8080), z `pyspark` i `boto3` doinstalowanymi z poziomu `AIRFLOW__CORE__EXECUTOR`.
+
+Nie trzeba niczego instalować lokalnie poza Dockerem.
+
+---
+
+## 🔁 Uruchamianie
+
 ```bash
-git clone https://github.com/twoj-login/etl-csv-parquet-minio.git
-cd etl-csv-parquet-minio
-
-    Odpalasz dockera:
-
+git clone https://github.com/twoj-login/minio-etl-airflow.git
+cd minio-etl-airflow
 docker-compose up
 
-    Wchodzisz w GUI:
+Po uruchomieniu:
 
-    Airflow: http://localhost:8080 (airflow / airflow)
+    Airflow dostępny pod: http://localhost:8080 (login: airflow, hasło: airflow)
 
-    MinIO: http://localhost:9001 (minioadmin / minioadmin)
+    MinIO: http://localhost:9001 (login: minioadmin, hasło: minioadmin)
 
-Wymagania
-
-Nie trzeba nic instalować – wszystko siedzi w Dockerze. Wymagane tylko:
-
-    Docker
-
-    Docker Compose
-
-Pliki w repo
+📁 Struktura repo
 
 .
-├── dags/                       # DAG z Airflowa
-│   └── csv_to_parquet_dag.py
-├── docker-compose.yml         # Airflow + MinIO
-├── diagram.png                # prosty rysunek jak to działa
-└── README.md
+├── dags/
+│   └── minio_etl_dag.py      # DAG przetwarzający nowe CSV
+├── docker-compose.yml        # MinIO + Airflow
+├── .gitignore
+└── README.md                 # Ten plik
+
+🪣 Przykład struktury bucketa
+
+Bucket: bucket1
+
+input/
+  ├── file1.csv
+  └── file2.csv
+
+output/
+  ├── file1.parquet
+  └── file2.parquet
+
+✍️ Uwagi
+
+Ten projekt zrobiłem głównie dla siebie, żeby poćwiczyć Airflowa i ogarnąć pipeline’y z S3-kompatybilnym storage’em. Wyszło prosto, ale działa.
+
+Jak ktoś chce wrzucać pliki i mieć je automatycznie przerobione na Parquet – to wystarczy wrzucić do input/ i poczekać minutę.
